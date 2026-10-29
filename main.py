@@ -5,7 +5,7 @@
 ║   ETHERION CoinTap  —  Premium Sales + Admin Panel Telegram Bot       ║
 ║   ------------------------------------------------------------------  ║
 ║   • Single file  • SQLite storage (data restart ke baad bhi safe)     ║
-║   • Termux + GSM Telegram Bot Hosting ready (pure python, no gcc)     ║
+║   • Termux + GSM + Render Hosting ready (pure python, no gcc)         ║
 ║   • Roles : BOSS (owner) > MANAGER > USER                             ║
 ║   • Flow  : BUY NOW -> QR (GitHub hosted) -> PAYMENT DONE ->          ║
 ║             UTR / Phone / UPI Name -> Admin Verification ->           ║
@@ -26,6 +26,7 @@ import time
 import traceback
 from datetime import datetime
 from html import escape as E
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from telegram import (BotCommand, CallbackQuery, InlineKeyboardButton,
                       InlineKeyboardMarkup, InputFile, Update)
@@ -374,6 +375,10 @@ def t_admin_dashboard(pending, verified, blocked, devices, users, role):
         f"/stats → View statistics\n"
     )
     return txt
+
+def t_blocked():
+    return ("🚫 <b>You have been BLOCKED.</b>\n"
+            "No further requests will be processed. Contact support if this is an error.")
 
 def payment_report_html(u: dict, p: dict, flag: bool = False) -> str:
     return (
@@ -915,8 +920,26 @@ async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE):
     LOG.error("ERROR SILENCED: %s", err)
 
 # ══════════════════════════════════════════════════════════════════════
-# 15.  BOOTSTRAP
+# 15.  BOOTSTRAP & RENDER HEALTH-CHECK SERVER
 # ══════════════════════════════════════════════════════════════════════
+class _HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"OK")
+    def log_message(self, format, *args):
+        return
+
+def start_render_server():
+    port = int(os.environ.get("PORT", 0))
+    if port > 0:
+        try:
+            srv = HTTPServer(("0.0.0.0", port), _HealthHandler)
+            threading.Thread(target=srv.serve_forever, daemon=True).start()
+            LOG.info("🌐 Render port server bound on port %d", port)
+        except Exception as e:
+            LOG.warning("Port bind skipped: %s", e)
+
 def build_request():
     kw = dict(connection_pool_size=8, read_timeout=60.0, write_timeout=60.0, connect_timeout=30.0, pool_timeout=30.0)
     try:
@@ -970,7 +993,12 @@ def seed():
 
 def main():
     boot_logging()
+    start_render_server()
     db_init(); seed()
+    try:
+        asyncio.get_event_loop()
+    except RuntimeError:
+        asyncio.set_event_loop(asyncio.new_event_loop())
     builder = Application.builder().token(BOT_TOKEN).request(build_request())
     for meth, arg in (("concurrent_updates", True), ("post_init", post_init)):
         try: builder = getattr(builder, meth)(arg)
